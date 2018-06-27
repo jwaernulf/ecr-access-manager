@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Deploys the ECR access manager and event rules to trigger it
+
+Parameters:
+  S3Bucket:
+    Description: A bucket in the same region where the zipped Lambda function is
+    Type: String
+  S3Key:
+    Description: The name of the zip file in the S3 Bucket
+    Type: String
+
+Resources:
+  PolicyManagerFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Description: >
+        Sets access policies on ECR repositories based on SSM parameters
+      Handler: "ecr-access-manager.handler"
+      Role:
+        Fn::GetAtt:
+          - "LambdaRole"
+          - "Arn"
+      Code:
+        S3Bucket: !Ref S3Bucket
+        S3Key: !Ref S3Key
+      Runtime: "nodejs8.10"
+      Timeout: "15"
+      MemorySize: '256'
+  LambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 'lambda.amazonaws.com'
+          Action: 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+      - PolicyName: get-and-set-ecr-policies
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - 'ecr:SetRepositoryPolicy'
+            - 'ecr:DescribeRepositories'
+            - 'ecr:DeleteRepositoryPolicy'
+            - 'ecr:GetRepositoryPolicy'
+            Resource: '*'
+      - PolicyName: read-ssm-parameters
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - 'ssm:GetParameterHistory'
+            - 'ssm:GetParametersByPath'
+            - 'ssm:GetParameters'
+            - 'ssm:GetParameter'
+            - 'ssm:DescribeParameters'
+            Resource: '*'
+      - PolicyName: logs
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - 'logs:CreateLogGroup'
+            - 'logs:CreateLogStream'
+            - 'logs:PutLogEvents'
+            - 'logs:DescribeLogStreams'
+            Resource: !Sub 'arn:aws:logs:*:*:log-group:/aws/lambda/*'
+  EventsInvokeLambdaPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      FunctionName: !Ref PolicyManagerFunction
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn:
+        Fn::GetAtt:
+          - "CloudWatchEventRule"
+          - "Arn"
+  CloudWatchEventRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: >
+        Triggers a Lambda function on all events
+      EventPattern: !Sub |
+        {
+          "source": [
+            "aws.ssm",
+            "aws.ecr"
+          ]
+        }
+      Targets:
+        -
+          Arn:
+            Fn::GetAtt:
+              - "PolicyManagerFunction"
+              - "Arn"
+          Id: !Sub '${AWS::StackName}'
